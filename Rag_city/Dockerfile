@@ -1,6 +1,3 @@
-Dockerfile
-
-
 # Python 3.11 슬림 이미지 사용
 FROM python:3.11-slim
 
