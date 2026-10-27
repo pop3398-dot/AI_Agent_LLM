@@ -20,4 +20,5 @@ COPY main.py .
 EXPOSE 8080
 
 # uvicorn 서버 실행
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# FastAPI 앱을 실행하고 Cloud Run이 전달하는 PORT 환경변수를 필수로 사용하도록 지정
+CMD exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}
