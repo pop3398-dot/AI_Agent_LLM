@@ -15,7 +15,6 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings, ChatGoogleGener
 from langchain_community.vectorstores import Chroma
 
 from langchain.retrievers.multi_query import MultiQueryRetriever
-from langchain import hub
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.callbacks import AsyncCallbackHandler
@@ -31,15 +30,15 @@ if not GEMINI_API_KEY:
 # Chroma DB 영구 저장 경로 설정 (Cloud Run 임시/볼륨 경로)
 CHROMA_PERSIST_DIRECTORY = "./chroma_db"
 
-# Google Embeddings 설정 (models/text-embedding-004)
+# Google Embeddings 설정
 embeddings = GoogleGenerativeAIEmbeddings(
     model="models/text-embedding-004",
     google_api_key=GEMINI_API_KEY
 )
 
-# Gemini LLM 설정 (gemini-2.5-flash)
+# Gemini LLM 설정 (안정적인 gemini-1.5-flash 또는 지정하신 모델명 사용)
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemini-1.5-flash",
     google_api_key=GEMINI_API_KEY,
     temperature=0.3,
     streaming=True
@@ -100,7 +99,6 @@ async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
         if len(file_bytes) == 0:
             raise HTTPException(status_code=400, detail="[내용 오류] 업로드된 파일이 비어 있습니다.")
 
-        # 임시 파일로 저장 후 PyPDFLoader로 로드
         import tempfile
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
             tmp_file.write(file_bytes)
@@ -116,7 +114,6 @@ async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
         if not documents:
             raise HTTPException(status_code=422, detail="[파싱 오류] PDF에서 텍스트를 추출할 수 없습니다.")
 
-        # 텍스트 청크 쪼개기 (Chunk Size: 1000, Overlap: 200)
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
             chunk_overlap=200,
@@ -124,11 +121,9 @@ async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
         )
         split_docs = text_splitter.split_documents(documents)
 
-        # 출처 파일명 메타데이터 추가
         for doc in split_docs:
             doc.metadata["source_filename"] = file.filename
 
-        # Chroma DB에 문서 임베딩 및 저장 (영구 저장소 연동)
         vector_store = Chroma.from_documents(
             documents=split_docs,
             embedding=embeddings,
@@ -149,15 +144,12 @@ async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
 
 @app.post("/query-stream")
 async def query_rag_stream(req: QueryRequest):
-    """
-    MultiQueryRetriever와 RunnablePassthrough, Prompt Hub를 활용한 RAG 스트리밍 질의
-    """
+    """MultiQueryRetriever와 RunnablePassthrough를 활용한 RAG 스트리밍 질의"""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="[질의 오류] 질문 내용이 비어 있습니다.")
 
     async def event_generator() -> AsyncGenerator[str, None]:
         try:
-            # 1. Chroma DB 로드
             if not os.path.exists(CHROMA_PERSIST_DIRECTORY):
                 raise HTTPException(status_code=400, detail="[검색 오류] 생성된 Vector DB가 없습니다. 먼저 PDF를 업로드하여 DB를 생성하세요.")
 
@@ -166,17 +158,14 @@ async def query_rag_stream(req: QueryRequest):
                 embedding_function=embeddings
             )
 
-            # 2. 다중 질문 검색기 (MultiQueryRetriever) 구성
             base_retriever = vector_store.as_retriever(search_kwargs={"k": 3})
             multi_query_retriever = MultiQueryRetriever.from_llm(
                 retriever=base_retriever,
                 llm=llm
             )
 
-            # 다중 쿼리로 문서 검색 실행
             retrieved_docs = await multi_query_retriever.ainvoke(req.query)
 
-            # 출처 정보 가공 및 전송
             sources_info = []
             context_text = ""
             for idx, doc in enumerate(retrieved_docs):
@@ -194,8 +183,6 @@ async def query_rag_stream(req: QueryRequest):
 
             yield f"data: {json.dumps({'type': 'sources', 'content': sources_info})}\n\n"
 
-            # 3. LangChain Prompt Hub에서 프롬프트 가져오기 또는 기본 RAG 프롬프트 대체 활용
-            # (안정적인 실행을 위해 랭체인 표준 RAG 프롬프트 구조 구성)
             from langchain_core.prompts import ChatPromptTemplate
             
             system_role_msg = (
@@ -208,16 +195,11 @@ async def query_rag_stream(req: QueryRequest):
                 ("human", "{question}")
             ])
 
-            # 4. RunnablePassthrough를 활용한 체인 구성
-            # 문서는 검색 결과 텍스트를 포맷팅하여 주입하고 질문은 그대로 전달
-            def format_docs(docs):
-                return "\n\n".join(d.page_content for d in docs)
-
             queue = asyncio.Queue()
             stream_handler = StreamHandler(queue)
 
             streaming_llm = ChatGoogleGenerativeAI(
-                model="gemini-2.5-flash",
+                model="gemini-1.5-flash",
                 google_api_key=GEMINI_API_KEY,
                 temperature=0.4,
                 streaming=True,
@@ -230,7 +212,6 @@ async def query_rag_stream(req: QueryRequest):
                 | streaming_llm
             )
 
-            # 5. 비동기 실행 및 실시간 스트리밍 송신
             task = asyncio.create_task(rag_chain.ainvoke(req.query))
 
             while True:
@@ -247,3 +228,11 @@ async def query_rag_stream(req: QueryRequest):
             yield f"data: {json.dumps({'type': 'error', 'content': error_msg})}\n\n"
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+# ------------------------------------------------------------------
+# 5. 서버 실행 진입점 (Cloud Run PORT 환경변수 연동)
+# ------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.environ.get("PORT", 8080))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
