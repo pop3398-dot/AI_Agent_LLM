@@ -27,12 +27,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise RuntimeError("[서버 초기화 에러] 필수 환경변수 'GEMINI_API_KEY'가 설정되지 않았습니다.")
 
-# Chroma DB 영구 저장 경로 설정 (Cloud Run 임시/볼륨 경로)
+# Chroma DB 영구 저장 경로 설정
 CHROMA_PERSIST_DIRECTORY = "./chroma_db"
 
-# [수정 완료] 모델 이름이 'models/'로 시작하도록 수정
+# [수정 완료] 최신 표준 임베딩 모델 설정
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/embedding-001",
+    model="text-embedding-004",
     google_api_key=GEMINI_API_KEY
 )
 
@@ -46,7 +46,6 @@ llm = ChatGoogleGenerativeAI(
 
 app = FastAPI(title="Hyun Jin-geon RAG AI Server")
 
-# CORS 설정 (Google Apps Script 연동 허용)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -55,17 +54,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------------------------------------------------
-# 2. 데이터 모델 정의
-# ------------------------------------------------------------------
 class QueryRequest(BaseModel):
     query: str
 
-# ------------------------------------------------------------------
-# 3. 실시간 스트리밍 핸들러 (StreamHandler)
-# ------------------------------------------------------------------
 class StreamHandler(AsyncCallbackHandler):
-    """LLM이 생성하는 토큰을 비동기 큐에 실시간으로 적재하는 핸들러"""
     def __init__(self, queue: asyncio.Queue):
         self.queue = queue
 
@@ -74,23 +66,18 @@ class StreamHandler(AsyncCallbackHandler):
             await self.queue.put(token)
 
     async def on_llm_end(self, response: Any, **kwargs: Any) -> None:
-        await self.queue.put(None)  # 스트리밍 종료 신호
+        await self.queue.put(None)
 
     async def on_llm_error(self, error: Exception, **kwargs: Any) -> None:
         await self.queue.put(f"\n[LLM 오류 발생: {str(error)}]\n")
         await self.queue.put(None)
 
-# ------------------------------------------------------------------
-# 4. API 엔드포인트
-# ------------------------------------------------------------------
 @app.get("/health")
 async def health_check():
-    """서버 상태 확인"""
     return {"status": "ok", "message": "현진건 작가 페르소나 RAG 서버가 정상 작동 중입니다."}
 
 @app.post("/upload-pdf")
 async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
-    """PDF 파일을 업로드받아 텍스트 추출 후 Chroma DB에 인덱싱"""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="[형식 오류] PDF 파일만 업로드할 수 있습니다.")
 
@@ -145,7 +132,6 @@ async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
 
 @app.post("/query-stream")
 async def query_rag_stream(req: QueryRequest):
-    """MultiQueryRetriever와 RunnablePassthrough를 활용한 RAG 스트리밍 질의"""
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="[질의 오류] 질문 내용이 비어 있습니다.")
 
@@ -230,9 +216,6 @@ async def query_rag_stream(req: QueryRequest):
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# ------------------------------------------------------------------
-# 5. 서버 실행 진입점 (Cloud Run PORT 환경변수 연동)
-# ------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8080))
