@@ -1,8 +1,9 @@
-fastapi
-uvicorn
-pydantic
-langchain-google-genai
-langchain-community
-langchain-core
-supabase
-pypdf
+fastapi>=0.110.0
+uvicorn>=0.28.0
+pydantic>=2.0.0
+langchain-google-genai>=1.0.0
+langchain-community>=0.0.30
+langchain-core>=0.1.30
+supabase>=2.0.0
+pypdf>=4.0.0
+requests>=2.31.0
