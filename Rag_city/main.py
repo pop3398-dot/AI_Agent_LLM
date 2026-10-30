@@ -30,13 +30,13 @@ if not GEMINI_API_KEY:
 # Chroma DB 영구 저장 경로 설정 (Cloud Run 임시/볼륨 경로)
 CHROMA_PERSIST_DIRECTORY = "./chroma_db"
 
-# Google Embeddings 설정
+# [수정 완료] 가장 안정적인 임베딩 모델인 'embedding-001'로 변경
 embeddings = GoogleGenerativeAIEmbeddings(
-    model="models/text-embedding-004",
+    model="embedding-001",
     google_api_key=GEMINI_API_KEY
 )
 
-# Gemini LLM 설정 (안정적인 gemini-1.5-flash 또는 지정하신 모델명 사용)
+# Gemini LLM 설정
 llm = ChatGoogleGenerativeAI(
     model="gemini-1.5-flash",
     google_api_key=GEMINI_API_KEY,
@@ -86,7 +86,7 @@ class StreamHandler(AsyncCallbackHandler):
 @app.get("/health")
 async def health_check():
     """서버 상태 확인"""
-    return {"status": "ok", "message": "현진건 작가 페르소나 RAG 서버가 정상 작동 중입니다."}
+    return {"status": "ok", "message": "정상 작동 중입니다."}
 
 @app.post("/upload-pdf")
 async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
@@ -129,7 +129,8 @@ async def upload_pdf_and_create_vector_db(file: UploadFile = File(...)):
             embedding=embeddings,
             persist_directory=CHROMA_PERSIST_DIRECTORY
         )
-        vector_store.persist()
+        if hasattr(vector_store, "persist"):
+            vector_store.persist()
 
         return {
             "status": "success",
@@ -186,8 +187,8 @@ async def query_rag_stream(req: QueryRequest):
             from langchain_core.prompts import ChatPromptTemplate
             
             system_role_msg = (
-                "당신은 소설 '운수 좋은 날'을 집필한 현진건 작가님입니다. "
-                "근대 한국 문학의 사실주의 관점과 시대적 아픔을 담아, 제공된 문서와 사용자의 질문에 답변하세요."
+                
+                " 제공된 문서와 사용자의 질문에 답변하세요."
             )
             
             rag_prompt = ChatPromptTemplate.from_messages([
